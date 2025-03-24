@@ -41,8 +41,13 @@ func (it *Iterator) Prev() {
 // seek to first node that >= target
 func (it *Iterator) Seek(target any) {
 	h := it.s.head
-	for i := it.s.level - 1; i >= 0; i-- {
+	var i = it.s.level - 1
+	for i >= 0 {
 		h = it.s.findLessThan(h, i, target)
+		j := i - 1
+		for ; j >= 0 && h.next[j] == h.next[i]; j-- {
+		}
+		i = j
 	}
 	it.cur = h.next[0]
 }
