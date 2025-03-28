@@ -48,6 +48,14 @@ func TestBasic(t *testing.T) {
 
 	it.Next()
 	assert.False(t, it.Valid())
+
+	it.Seek(1.1)
+	assert.True(t, it.Valid())
+	assert.Equal(t, 1.23, it.Key())
+
+	it.Seek(12.34)
+	assert.True(t, it.Valid())
+	assert.Equal(t, 12.34, it.Key())
 }
 
 func TestRandom(t *testing.T) {
