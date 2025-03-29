@@ -21,18 +21,16 @@ func NewMemTable(maxSize uint64) *MemTable {
 }
 
 func (mem *MemTable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue []byte) {
-	ik := key.New(userKey, seq, tp)
-	value := make([]byte, len(userValue))
-	copy(value, userValue)
+	ik := key.New(userKey, userValue, seq, tp)
 
-	mem.skl.Insert(ik, value)
+	mem.skl.Insert(ik)
 	mem.size += ik.Size() + uint64(len(userValue))
 }
 
 // 返回 <= seq 的最新记录
 func (mem *MemTable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	// tp 值无意义
-	expectKey := key.New(userKey, seq, key.KTypeDeletion)
+	expectKey := key.New(userKey, nil, seq, key.KTypeDeletion)
 	iter := mem.skl.Iterator()
 	iter.Seek(expectKey)
 	if !iter.Valid() {
@@ -44,8 +42,8 @@ func (mem *MemTable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	if bytes.Equal(expectKey.UserKey, exactKey.UserKey) {
 		switch exactKey.Type {
 		case key.KTypeValue:
-			value = iter.Value().([]byte)
-			return value, true
+			ik := iter.Key().(key.InternalKey)
+			return ik.UserValue, true
 		case key.KTypeDeletion:
 			return nil, false
 		default:
