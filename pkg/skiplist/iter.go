@@ -17,6 +17,13 @@ func (it *Iterator) Key() any {
 	return it.cur.key
 }
 
+func (it *Iterator) Value() any {
+	if !it.Valid() {
+		return nil
+	}
+	return it.cur.value
+}
+
 func (it *Iterator) Next() {
 	if !it.Valid() {
 		panic("Iterator is not valid")

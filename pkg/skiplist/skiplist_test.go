@@ -19,11 +19,11 @@ func TestBasic(t *testing.T) {
 		return cmp.Compare(l.(float64), r.(float64))
 	}))
 
-	s.Insert(1.23)
-	s.Insert(-0.12)
-	s.Insert(4.56)
-	s.Insert(12.34)
-	s.Insert(0.12)
+	s.Insert(1.23, "2")
+	s.Insert(-0.12, "0")
+	s.Insert(4.56, "3")
+	s.Insert(12.34, "4")
+	s.Insert(0.12, "1")
 
 	it := s.Iterator()
 	it.SeekToFirst()
@@ -69,8 +69,8 @@ func TestRandom(t *testing.T) {
 		return cmp.Compare(l.(int), r.(int))
 	}))
 
-	for range N {
-		s.Insert(rnd.Int())
+	for i := range N {
+		s.Insert(rnd.Int(), i)
 	}
 
 	assert.Equal(t, N, s.Len())
@@ -107,7 +107,7 @@ func BenchmarkMySkiplistWrite(b *testing.B) {
 
 	idx := 0
 	for b.Loop() {
-		s.Insert(data[idx])
+		s.Insert(data[idx], idx)
 		idx++
 		if idx == N {
 			idx = 0
@@ -122,13 +122,14 @@ func BenchmarkMySkiplistRead(b *testing.B) {
 	N := 1_000_000
 	data := generate(N)
 	for i := range N {
-		s.Insert(data[i])
+		s.Insert(data[i], i)
 	}
 
 	it := s.Iterator()
 	idx := 0
 	for b.Loop() {
 		it.Seek(data[idx])
+		_ = it.Value()
 		idx++
 		if idx == N {
 			idx = 0

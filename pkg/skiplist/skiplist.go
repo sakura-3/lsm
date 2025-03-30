@@ -25,7 +25,7 @@ type Skiplist struct {
 
 func New(comp CompareFunc) *Skiplist {
 	return &Skiplist{
-		head:  newNode(maxLevel, nil, -math.MaxFloat64),
+		head:  newNode(maxLevel, nil, nil, -math.MaxFloat64),
 		tail:  nil,
 		seed:  rand.New(rand.NewSource(time.Now().UnixNano())),
 		size:  0,
@@ -34,7 +34,7 @@ func New(comp CompareFunc) *Skiplist {
 	}
 }
 
-func (s *Skiplist) Insert(key any) {
+func (s *Skiplist) Insert(key, value any) {
 	h := s.head
 	prev := make([]*node, maxLevel)
 	for i := range prev {
@@ -50,7 +50,7 @@ func (s *Skiplist) Insert(key any) {
 	}
 
 	newLevel := s.randomLevel()
-	n := newNode(newLevel, key, s.comp.score(key))
+	n := newNode(newLevel, key, value, s.comp.score(key))
 
 	n.prev = prev[0]
 	if prev[0].next[0] != nil {
