@@ -74,7 +74,7 @@ func (bi *BlockIterator) Rewind() {
 	bi.index = 0
 }
 
-// 第一个 >= target 的位置
+// 第一个 >= target 的位置, 只有不存在这样的记录时, Valid() 为 false
 func (bi *BlockIterator) Seek(target []byte) {
 	idx := sort.Search(len(bi.block.keys), func(i int) bool {
 		return bytes.Compare(bi.block.keys[i], target) >= 0
@@ -84,6 +84,10 @@ func (bi *BlockIterator) Seek(target []byte) {
 
 func (bi *BlockIterator) Next() {
 	bi.index++
+}
+
+func (bi *BlockIterator) Prev() {
+	bi.index--
 }
 
 func (bi *BlockIterator) Valid() bool {

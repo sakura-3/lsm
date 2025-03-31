@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"lsm/internal/block"
 	"os"
@@ -82,7 +83,7 @@ func (tb *TableBuilder) Add(key, value []byte) error {
 }
 
 func (tb *TableBuilder) Finish() error {
-	// data block if any
+	// write data block if any
 	if err := tb.flush(); err != nil {
 		return err
 	}
@@ -141,18 +142,77 @@ func (tb *TableBuilder) writeBlock(bb *block.BlockBuilder) (bh block.BlockHandle
 }
 
 type SSTable struct {
-	fd     *os.File
-	footer Footer
-	index  *block.Block
+	fd    *os.File
+	index *block.Block
 }
 
 func Open(filename string) (*SSTable, error) {
-	_, err := os.Open(filename)
+	fd, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: read footer
+	info, err := fd.Stat()
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	// read footer
+	var footer Footer
+	footerData := make([]byte, footer.Size())
+	if _, err := fd.ReadAt(footerData, info.Size()-int64(footer.Size())); err != nil {
+		return nil, err
+	}
+	footer.decodeFrom(footerData)
+
+	// load index block from footer
+	indexData := make([]byte, footer.indexBlockHandler.Size)
+	if _, err := fd.ReadAt(indexData, int64(footer.indexBlockHandler.Offset)); err != nil {
+		return nil, err
+	}
+	index := block.NewBlock(indexData)
+
+	return &SSTable{
+		fd:    fd,
+		index: index,
+	}, nil
+}
+
+type SSTableIterator struct {
+	sst *SSTable
+
+	indexBlockIter *block.BlockIterator
+	dataBlockIter  *block.BlockIterator
+}
+
+func (s *SSTable) NewIterator() *SSTableIterator {
+	return &SSTableIterator{
+		sst:            s,
+		indexBlockIter: s.index.NewIterator(),
+	}
+}
+
+// 第一个 >= target 的位置, 只有不存在这样的记录时, Valid() 为 false
+// seek to the first position where the key >= target
+// Valid() is false after this call iff there 
+func (si *SSTableIterator) Seek(target []byte) {
+	si.dataBlockIter = nil
+
+	// current data block has minKey >= target,so the seek position is
+	// either at the beginning of the current data block or in the previous data block.
+	si.indexBlockIter.Seek(target)
+
+	if !si.indexBlockIter.Valid() {
+		return
+	}
+
+	// if current data block's minKey == target,we can ensure that 
+	// the seek position is at the beginning of the current data block.
+	if bytes.Equal(si.indexBlockIter.Key(), target) {
+
+	}
+}
+
+func (si *SSTableIterator) Valid() bool {
+	return si.indexBlockIter.Valid() && (si.dataBlockIter != nil && si.dataBlockIter.Valid())
 }

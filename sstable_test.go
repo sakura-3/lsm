@@ -1,0 +1,153 @@
+package lsm
+
+import (
+	"fmt"
+	"io"
+	"lsm/internal/block"
+	"os"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestFooterEncode(t *testing.T) {
+	f := Footer{
+		indexBlockHandler: block.BlockHandler{
+			Offset: 8,
+			Size:   16,
+		},
+	}
+	actual := f.encodeTo()
+	expected := []byte{
+		// offset
+		0x8, 0x0, 0x0, 0x0,
+		// size
+		0x10, 0x0, 0x0, 0x0,
+		// magic number
+		0x57, 0xfb, 0x80, 0x8b, 0x24, 0x75, 0x47, 0xdb,
+	}
+	assert.Equal(t, expected, actual)
+}
+
+func TestFooterDecode(t *testing.T) {
+	f := Footer{}
+	f.decodeFrom([]byte{
+		// offset
+		0x78, 0x56, 0x34, 0x12,
+		// size
+		0x12, 0x34, 0x56, 0x78,
+		// magic number
+		0x57, 0xfb, 0x80, 0x8b, 0x24, 0x75, 0x47, 0xdb,
+	})
+	assert.Equal(t, uint32(0x12345678), f.indexBlockHandler.Offset)
+	assert.Equal(t, uint32(0x78563412), f.indexBlockHandler.Size)
+}
+
+func TestSSTableBasic(t *testing.T) {
+	tb, err := newTableBuilder("TestSSTableBasic.sst")
+	assert.Nil(t, err)
+	defer os.Remove("TestSSTableBasic.sst")
+
+	// key1 value
+	tb.Add([]byte{0x1, 0x1, 0x1, 0x1}, []byte{0x01, 0x23, 0x45, 0x67, 0x89})
+	// key2 value
+	tb.Add([]byte{0x2, 0x2, 0x2, 0x2, 0x2}, []byte{0x01, 0x23, 0x45, 0x67, 0x89})
+	// key3 value
+	tb.Add([]byte{0x3, 0x3, 0x3, 0x3, 0x3, 0x3}, []byte{0x01, 0x23, 0x45, 0x67, 0x89})
+
+	tb.Finish()
+
+	// 打开文件
+	fd, err := os.Open("TestSSTableBasic.sst")
+	assert.Nil(t, err)
+	defer fd.Close()
+	actual, err := io.ReadAll(fd)
+	assert.Nil(t, err)
+
+	expected := []byte{
+		// data block 1 begin
+
+		// len(key1) = 4, little endian
+		0x4, 0x0, 0x0, 0x0,
+		// key1 = 0x01010101
+		0x01, 0x01, 0x01, 0x01,
+		// len(value) = 5, little endian
+		0x5, 0x0, 0x0, 0x0,
+		// value = 0x0123456789
+		0x01, 0x23, 0x45, 0x67, 0x89,
+
+		// len(key2) = 5, little endian
+		0x5, 0x0, 0x0, 0x0,
+		// key2 = 0x0202020202
+		0x02, 0x02, 0x02, 0x02, 0x02,
+		// len(value) = 5, little endian
+		0x5, 0x0, 0x0, 0x0,
+		// value = 0x0123456789
+		0x01, 0x23, 0x45, 0x67, 0x89,
+
+		// len(key3) = 6, little endian
+		0x6, 0x0, 0x0, 0x0,
+		// key3 = 0x030303030303
+		0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+		// len(value) = 5, little endian
+		0x5, 0x0, 0x0, 0x0,
+		// value = 0x0123456789
+		0x01, 0x23, 0x45, 0x67, 0x89,
+
+		// counter = 3, little endian
+		0x3, 0x0, 0x0, 0x0,
+
+		// data block 1 end
+
+		// index block begin
+
+		// len(key1) = 4, little endian
+		0x4, 0x0, 0x0, 0x0,
+		// key1 = 0x01010101
+		0x01, 0x01, 0x01, 0x01,
+		// len(value) = 8, little endian
+		0x8, 0x0, 0x0, 0x0,
+		// value = blockHandler{offset: 0, size: 58} -> [0x0, 0x0, 0x0, 0x0, 0x3a, 0x0, 0x0, 0x0]
+		0x0, 0x0, 0x0, 0x0, 0x3a, 0x0, 0x0, 0x0,
+
+		// counter = 1, little endian
+		0x1, 0x0, 0x0, 0x0,
+
+		// index block end
+
+		// footer begin
+
+		// index block handler = blockHandler{offset: 58, size: 24} -> [0x3a, 0x0, 0x0, 0x0, 0x18, 0x0, 0x0, 0x0]
+		0x3a, 0x0, 0x0, 0x0, 0x18, 0x0, 0x0, 0x0,
+		// magic number, little endian
+		0x57, 0xfb, 0x80, 0x8b, 0x24, 0x75, 0x47, 0xdb,
+
+		// footer end
+	}
+
+	assert.Equal(t, expected, actual)
+}
+
+func TestSSTableMultipleDataBlock(t *testing.T) {
+	tb, err := newTableBuilder("TestSSTableMultipleDataBlock.sst")
+	assert.Nil(t, err)
+	defer os.Remove("TestSSTableMultipleDataBlock.sst")
+
+	// a data block can hold maxDataBlockSize(4096) / (4+12+4+12) = 128 key-value pairs
+	keyFormat := "k%11d"
+	valueFormat := "v%11d"
+
+	// should take ceil(keyN / 128) = 782 data blocks
+	// so we should have 782 kv in index block
+	keyN := 100_000
+	for i := range keyN {
+		tb.Add(fmt.Appendf(nil, keyFormat, i), fmt.Appendf(nil, valueFormat, i))
+	}
+	tb.Finish()
+
+	sstable, err := Open("TestSSTableMultipleDataBlock.sst")
+	assert.Nil(t, err)
+
+	assert.Equal(t, 782, sstable.index.Size())
+}
+

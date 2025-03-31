@@ -34,6 +34,8 @@ func New(comp CompareFunc) *Skiplist {
 	}
 }
 
+// insert key:value into skiplist
+// if key already exist, panic
 func (s *Skiplist) Insert(key, value any) {
 	h := s.head
 	prev := make([]*node, maxLevel)
