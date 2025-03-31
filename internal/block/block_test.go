@@ -15,7 +15,7 @@ func TestBlock(t *testing.T) {
 
 	data := bb.Finish()
 
-	block := NewBlock(data)
+	block := newBlockFromRawData(data)
 	assert.Equal(t, 3, block.Size())
 
 	iter := block.NewIterator()

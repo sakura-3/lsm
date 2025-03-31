@@ -3,6 +3,7 @@ package block
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
 	"sort"
 )
 
@@ -28,7 +29,15 @@ type Block struct {
 	values [][]byte
 }
 
-func NewBlock(data []byte) *Block {
+func NewBlock(fd *os.File, bh BlockHandler) (*Block, error) {
+	data := make([]byte, bh.Size)
+	if _, err := fd.ReadAt(data, int64(bh.Offset)); err != nil {
+		return nil, err
+	}
+	return newBlockFromRawData(data), nil
+}
+
+func newBlockFromRawData(data []byte) *Block {
 	counter := binary.LittleEndian.Uint32(data[len(data)-4:])
 
 	block := &Block{
@@ -74,7 +83,8 @@ func (bi *BlockIterator) Rewind() {
 	bi.index = 0
 }
 
-// 第一个 >= target 的位置, 只有不存在这样的记录时, Valid() 为 false
+// seek to the first position where the key >= target
+// Valid() is false after this call iff such position does not exist
 func (bi *BlockIterator) Seek(target []byte) {
 	idx := sort.Search(len(bi.block.keys), func(i int) bool {
 		return bytes.Compare(bi.block.keys[i], target) >= 0

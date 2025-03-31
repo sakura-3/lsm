@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"lsm/internal/block"
 	"os"
@@ -179,16 +180,27 @@ func Open(filename string) (*SSTable, error) {
 	footer.decodeFrom(footerData)
 
 	// load index block from footer
-	indexData := make([]byte, footer.indexBlockHandler.Size)
-	if _, err := fd.ReadAt(indexData, int64(footer.indexBlockHandler.Offset)); err != nil {
+	index, err := block.NewBlock(fd, footer.indexBlockHandler)
+	if err != nil {
 		return nil, err
 	}
-	index := block.NewBlock(indexData)
 
 	return &SSTable{
 		fd:    fd,
 		index: index,
 	}, nil
+}
+
+func (s *SSTable) Get(key []byte) ([]byte, bool) {
+	iter := s.NewIterator()
+	iter.Seek(key)
+	if !iter.Valid() {
+		return nil, false
+	}
+	if !bytes.Equal(iter.Key(), key) {
+		return nil, false
+	}
+	return iter.Value(), true
 }
 
 type SSTableIterator struct {
@@ -205,22 +217,58 @@ func (s *SSTable) NewIterator() *SSTableIterator {
 	}
 }
 
-// 第一个 >= target 的位置, 只有不存在这样的记录时, Valid() 为 false
 // seek to the first position where the key >= target
-// Valid() is false after this call iff there
+// Valid() is false after this call iff such position does not exist
+// or some internal error occurs
 func (si *SSTableIterator) Seek(target []byte) {
 	si.dataBlockIter = nil
 
-	// current data block has minKey >= target,so the seek position is
-	// either at the beginning of the current data block or in the previous data block.
+	// current data block has maxKey >= target,and prev data block's maxKey should < target
+	// so the seek position should exactly in this block
 	si.indexBlockIter.Seek(target)
 
 	if !si.indexBlockIter.Valid() {
 		return
 	}
 
+	// load data block
+	var bh block.BlockHandler
+	bh.DecodeFrom(si.indexBlockIter.Value())
+	dataBlock, err := block.NewBlock(si.sst.fd, bh)
+	if err != nil {
+		return
+	}
+	si.dataBlockIter = dataBlock.NewIterator()
+
+	si.dataBlockIter.Seek(target)
 }
 
 func (si *SSTableIterator) Valid() bool {
 	return si.indexBlockIter.Valid() && (si.dataBlockIter != nil && si.dataBlockIter.Valid())
+}
+
+// requires si.Valid()
+func (si *SSTableIterator) Key() []byte {
+	return si.dataBlockIter.Key()
+}
+
+// requires si.Valid()
+func (si *SSTableIterator) Value() []byte {
+	return si.dataBlockIter.Value()
+}
+
+func (si *SSTableIterator) Next() {
+	si.dataBlockIter.Next()
+	if !si.dataBlockIter.Valid() {
+		si.indexBlockIter.Next()
+		if si.indexBlockIter.Valid() {
+			var bh block.BlockHandler
+			bh.DecodeFrom(si.indexBlockIter.Value())
+			dataBlock, err := block.NewBlock(si.sst.fd, bh)
+			if err != nil {
+				return
+			}
+			si.dataBlockIter = dataBlock.NewIterator()
+		}
+	}
 }
