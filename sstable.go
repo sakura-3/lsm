@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"encoding/binary"
 	"lsm/internal/block"
 	"os"
@@ -46,12 +45,15 @@ type TableBuilder struct {
 	// 写入 internalKey + userValue
 	dataBlockBuilder *block.BlockBuilder
 
-	// 写入每个 dataBlock 的 最小 key 和 blockHandler
+	// 写入每个 dataBlock 的 最大 key 和 blockHandler
+	// 使用 最大key 而不是 最小key 有助于 seek 的实现
 	indexBlockBuilder *block.BlockBuilder
 
-	// 当前 dataBlock 的最小 key
-	// dataBlock 写满后, 会把这个 key 写入 indexBlock
-	minKey []byte
+	// 若当前 data block 已满, hasPendingIndexEntry 设置为 true
+	// 将在下次 Add 或 Finish 时为 index block 写入 maxKey:pendingIndexEntry
+	hasPendingIndexEntry bool
+	maxKey               []byte
+	pendingIndexEntry    block.BlockHandler
 }
 
 func newTableBuilder(filename string) (*TableBuilder, error) {
@@ -67,9 +69,12 @@ func newTableBuilder(filename string) (*TableBuilder, error) {
 }
 
 func (tb *TableBuilder) Add(key, value []byte) error {
-	if tb.dataBlockBuilder.Empty() {
-		tb.minKey = key
+	if tb.hasPendingIndexEntry {
+		tb.indexBlockBuilder.Add(tb.maxKey, tb.pendingIndexEntry.EncodeTo())
+		tb.hasPendingIndexEntry = false
 	}
+
+	tb.maxKey = key
 
 	tb.dataBlockBuilder.Add(key, value)
 
@@ -86,6 +91,11 @@ func (tb *TableBuilder) Finish() error {
 	// write data block if any
 	if err := tb.flush(); err != nil {
 		return err
+	}
+
+	if tb.hasPendingIndexEntry {
+		tb.indexBlockBuilder.Add(tb.maxKey, tb.pendingIndexEntry.EncodeTo())
+		tb.hasPendingIndexEntry = false
 	}
 
 	// index block
@@ -119,7 +129,10 @@ func (tb *TableBuilder) flush() error {
 	if err != nil {
 		return err
 	}
-	tb.indexBlockBuilder.Add(tb.minKey, bh.EncodeTo())
+
+	tb.pendingIndexEntry = bh
+	tb.hasPendingIndexEntry = true
+
 	return nil
 }
 
@@ -194,7 +207,7 @@ func (s *SSTable) NewIterator() *SSTableIterator {
 
 // 第一个 >= target 的位置, 只有不存在这样的记录时, Valid() 为 false
 // seek to the first position where the key >= target
-// Valid() is false after this call iff there 
+// Valid() is false after this call iff there
 func (si *SSTableIterator) Seek(target []byte) {
 	si.dataBlockIter = nil
 
@@ -206,11 +219,6 @@ func (si *SSTableIterator) Seek(target []byte) {
 		return
 	}
 
-	// if current data block's minKey == target,we can ensure that 
-	// the seek position is at the beginning of the current data block.
-	if bytes.Equal(si.indexBlockIter.Key(), target) {
-
-	}
 }
 
 func (si *SSTableIterator) Valid() bool {
