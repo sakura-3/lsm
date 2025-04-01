@@ -42,6 +42,8 @@ func (f *Footer) decodeFrom(data []byte) {
 type TableBuilder struct {
 	fd *os.File
 
+	fileSize uint64
+
 	offset uint32
 	// 写入 internalKey + userValue
 	dataBlockBuilder *block.BlockBuilder
@@ -109,7 +111,9 @@ func (tb *TableBuilder) Finish() error {
 	footer := Footer{
 		indexBlockHandler: bh,
 	}
-	_, err = tb.fd.Write(footer.encodeTo())
+	footerData := footer.encodeTo()
+	_, err = tb.fd.Write(footerData)
+	tb.fileSize += uint64(footer.Size())
 	if err != nil {
 		return err
 	}
@@ -141,6 +145,7 @@ func (tb *TableBuilder) writeBlock(bb *block.BlockBuilder) (bh block.BlockHandle
 	data := bb.Finish()
 
 	_, err = tb.fd.Write(data)
+	tb.fileSize += uint64(len(data))
 	if err != nil {
 		return block.BlockHandler{}, err
 	}

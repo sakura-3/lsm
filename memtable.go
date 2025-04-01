@@ -6,21 +6,21 @@ import (
 	"lsm/pkg/skiplist"
 )
 
-type MemTable struct {
+type memtable struct {
 	skl  *skiplist.Skiplist
 	size uint64
 
 	maxSize uint64
 }
 
-func NewMemTable(maxSize uint64) *MemTable {
-	return &MemTable{
+func NewMemtable(maxSize uint64) *memtable {
+	return &memtable{
 		skl:     skiplist.New(skiplist.CompareFunc(key.InternalKeyCompareFunc)),
 		maxSize: maxSize,
 	}
 }
 
-func (mem *MemTable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue []byte) {
+func (mem *memtable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue []byte) {
 	ik := key.New(userKey, seq, tp)
 	value := make([]byte, len(userValue))
 	copy(value, userValue)
@@ -30,7 +30,7 @@ func (mem *MemTable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue [
 }
 
 // 返回 <= seq 的最新记录
-func (mem *MemTable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
+func (mem *memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	// tp 值无意义
 	expectKey := key.New(userKey, seq, key.KTypeDeletion)
 	iter := mem.skl.Iterator()
@@ -55,6 +55,6 @@ func (mem *MemTable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	return nil, false
 }
 
-func (mem *MemTable) Full() bool {
+func (mem *memtable) Full() bool {
 	return mem.size >= mem.maxSize
 }

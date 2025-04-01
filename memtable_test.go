@@ -9,7 +9,7 @@ import (
 )
 
 func TestMemTableBasic(t *testing.T) {
-	mem := NewMemTable(math.MaxUint64)
+	mem := NewMemtable(math.MaxUint64)
 	mem.Add(0, key.KTypeValue, []byte("name"), []byte("xiao ming"))
 	mem.Add(1, key.KTypeValue, []byte("age"), []byte("18"))
 	mem.Add(2, key.KTypeValue, []byte("name"), []byte("hong hong"))
