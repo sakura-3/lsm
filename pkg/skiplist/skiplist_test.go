@@ -4,9 +4,9 @@ import (
 	"cmp"
 	"math"
 	"math/rand"
+	"strconv"
 	"testing"
 
-	"github.com/huandu/skiplist"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,47 +15,50 @@ func init() {
 }
 
 func TestBasic(t *testing.T) {
-	s := New(CompareFunc(func(l, r any) int {
-		return cmp.Compare(l.(float64), r.(float64))
+	s := New(CompareFunc(func(l, r []byte) int {
+		lv, _ := strconv.ParseFloat(string(l), 64)
+
+		rv, _ := strconv.ParseFloat(string(r), 64)
+		return cmp.Compare(lv, rv)
 	}))
 
-	s.Insert(1.23, "2")
-	s.Insert(-0.12, "0")
-	s.Insert(4.56, "3")
-	s.Insert(12.34, "4")
-	s.Insert(0.12, "1")
+	s.Insert([]byte("1.23"))
+	s.Insert([]byte("-0.12"))
+	s.Insert([]byte("4.56"))
+	s.Insert([]byte("12.34"))
+	s.Insert([]byte("0.12"))
 
 	it := s.Iterator()
 	it.SeekToFirst()
 	assert.True(t, it.Valid())
-	assert.Equal(t, -0.12, it.Key())
+	assert.Equal(t, []byte("-0.12"), it.Key())
 
 	it.Next()
 	assert.True(t, it.Valid())
-	assert.Equal(t, 0.12, it.Key())
+	assert.Equal(t, []byte("0.12"), it.Key())
 
 	it.Next()
 	assert.True(t, it.Valid())
-	assert.Equal(t, 1.23, it.Key())
+	assert.Equal(t, []byte("1.23"), it.Key())
 
 	it.Next()
 	assert.True(t, it.Valid())
-	assert.Equal(t, 4.56, it.Key())
+	assert.Equal(t, []byte("4.56"), it.Key())
 
 	it.Next()
 	assert.True(t, it.Valid())
-	assert.Equal(t, 12.34, it.Key())
+	assert.Equal(t, []byte("12.34"), it.Key())
 
 	it.Next()
 	assert.False(t, it.Valid())
 
-	it.Seek(1.1)
+	it.Seek([]byte("1.1"))
 	assert.True(t, it.Valid())
-	assert.Equal(t, 1.23, it.Key())
+	assert.Equal(t, []byte("1.23"), it.Key())
 
-	it.Seek(12.34)
+	it.Seek([]byte("12.34"))
 	assert.True(t, it.Valid())
-	assert.Equal(t, 12.34, it.Key())
+	assert.Equal(t, []byte("12.34"), it.Key())
 }
 
 func TestRandom(t *testing.T) {
@@ -65,12 +68,14 @@ func TestRandom(t *testing.T) {
 	)
 
 	rnd := rand.New(rand.NewSource(seed))
-	s := New(CompareFunc(func(l, r any) int {
-		return cmp.Compare(l.(int), r.(int))
+	s := New(CompareFunc(func(l, r []byte) int {
+		lv, _ := strconv.Atoi(string(l))
+		rv, _ := strconv.Atoi(string(r))
+		return cmp.Compare(lv, rv)
 	}))
 
-	for i := range N {
-		s.Insert(rnd.Int(), i)
+	for range N {
+		s.Insert([]byte(strconv.Itoa(rnd.Int())))
 	}
 
 	assert.Equal(t, N, s.Len())
@@ -78,14 +83,16 @@ func TestRandom(t *testing.T) {
 	left := math.MinInt
 	it := s.Iterator()
 	for it.SeekToFirst(); it.Valid(); it.Next() {
-		assert.True(t, left <= it.Key().(int))
-		left = it.Key().(int)
+		v, _ := strconv.Atoi(string(it.Key()))
+		assert.True(t, left <= v)
+		left = v
 	}
 
 	right := math.MaxInt
 	for it.SeekToLast(); it.Valid(); it.Prev() {
-		assert.True(t, it.Key().(int) <= right)
-		right = it.Key().(int)
+		v, _ := strconv.Atoi(string(it.Key()))
+		assert.True(t, v <= right)
+		right = v
 	}
 }
 
@@ -95,77 +102,4 @@ func generate(N int) []int {
 		data[i] = rand.Int()
 	}
 	return data
-}
-
-func BenchmarkMySkiplistWrite(b *testing.B) {
-	s := New(CompareFunc(func(l, r any) int {
-		return cmp.Compare(l.(int), r.(int))
-	}))
-
-	N := 1_000_000
-	data := generate(N)
-
-	idx := 0
-	for b.Loop() {
-		s.Insert(data[idx], idx)
-		idx++
-		if idx == N {
-			idx = 0
-		}
-	}
-}
-
-func BenchmarkMySkiplistRead(b *testing.B) {
-	s := New(CompareFunc(func(l, r any) int {
-		return cmp.Compare(l.(int), r.(int))
-	}))
-	N := 1_000_000
-	data := generate(N)
-	for i := range N {
-		s.Insert(data[i], i)
-	}
-
-	it := s.Iterator()
-	idx := 0
-	for b.Loop() {
-		it.Seek(data[idx])
-		_ = it.Value()
-		idx++
-		if idx == N {
-			idx = 0
-		}
-	}
-}
-
-func BenchmarkSkiplistWrite(b *testing.B) {
-	s := skiplist.New(skiplist.Int)
-	N := 1_000_000
-	data := generate(N)
-
-	idx := 0
-	for b.Loop() {
-		s.Set(data[idx], idx)
-		idx++
-		if idx == N {
-			idx = 0
-		}
-	}
-}
-
-func BenchmarkSkiplistRead(b *testing.B) {
-	s := skiplist.New(skiplist.Int)
-	N := 1_000_000
-	data := generate(N)
-	for i := range N {
-		s.Set(data[i], i)
-	}
-
-	idx := 0
-	for b.Loop() {
-		_ = s.Get(data[idx])
-		idx++
-		if idx == N {
-			idx = 0
-		}
-	}
 }

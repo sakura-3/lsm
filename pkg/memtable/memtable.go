@@ -1,4 +1,4 @@
-package lsm
+package memtable
 
 import (
 	"bytes"
@@ -6,46 +6,44 @@ import (
 	"lsm/pkg/skiplist"
 )
 
-type memtable struct {
+type Memtable struct {
 	skl  *skiplist.Skiplist
 	size uint64
 
 	maxSize uint64
 }
 
-func NewMemtable(maxSize uint64) *memtable {
-	return &memtable{
+func NewMemtable(maxSize uint64) *Memtable {
+	return &Memtable{
 		skl:     skiplist.New(skiplist.CompareFunc(key.InternalKeyCompareFunc)),
 		maxSize: maxSize,
 	}
 }
 
-func (mem *memtable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue []byte) {
-	ik := key.New(userKey, seq, tp)
-	value := make([]byte, len(userValue))
-	copy(value, userValue)
+func (mem *Memtable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue []byte) {
+	ik := key.New(userKey, userValue, seq, tp)
 
-	mem.skl.Insert(ik, value)
+	mem.skl.Insert(ik.EncodeTo())
 	mem.size += ik.Size() + uint64(len(userValue))
 }
 
 // 返回 <= seq 的最新记录
-func (mem *memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
+func (mem *Memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	// tp 值无意义
-	expectKey := key.New(userKey, seq, key.KTypeDeletion)
+	expectKey := key.New(userKey, nil, seq, key.KTypeDeletion)
 	iter := mem.skl.Iterator()
-	iter.Seek(expectKey)
+	iter.Seek(expectKey.EncodeTo())
 	if !iter.Valid() {
 		return nil, false
 	}
 
-	exactKey := iter.Key().(key.InternalKey)
+	var exactKey key.InternalKey
+	exactKey.DecodeFrom(iter.Key())
 	// 只需要比较 userKey,seek 保证返回的是 seq 最大的记录
 	if bytes.Equal(expectKey.UserKey, exactKey.UserKey) {
 		switch exactKey.Type {
 		case key.KTypeValue:
-			value = iter.Value().([]byte)
-			return value, true
+			return exactKey.UserValue, true
 		case key.KTypeDeletion:
 			return nil, false
 		default:
@@ -55,6 +53,10 @@ func (mem *memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	return nil, false
 }
 
-func (mem *memtable) Full() bool {
+func (mem *Memtable) Iterator() *skiplist.Iterator {
+	return mem.skl.Iterator()
+}
+
+func (mem *Memtable) Full() bool {
 	return mem.size >= mem.maxSize
 }

@@ -1,10 +1,13 @@
-package lsm
+package version
 
 import (
 	"bytes"
 	"encoding/binary"
 	"io"
 	"lsm/internal/key"
+	"lsm/internal/util"
+	"lsm/pkg/memtable"
+	"lsm/pkg/sstable"
 	"os"
 	"slices"
 	"sort"
@@ -20,18 +23,21 @@ type FileMetaData struct {
 
 	// File number in the db
 	// decide the sstable file name
+	dbName string
 	number uint64
 
 	fileSize uint64
 
 	// Smallest/largest key in the sstable
-	smallest key.InternalKey
-	largest  key.InternalKey
+	smallest *key.InternalKey
+	largest  *key.InternalKey
 }
 
 // TODO error handling
 func (meta *FileMetaData) EncodeTo(w io.Writer) error {
 	binary.Write(w, binary.LittleEndian, meta.allowSeeks)
+	binary.Write(w, binary.LittleEndian, len(meta.dbName))
+	w.Write([]byte(meta.dbName))
 	binary.Write(w, binary.LittleEndian, meta.number)
 	binary.Write(w, binary.LittleEndian, meta.fileSize)
 	meta.smallest.EncodeTo(w)
@@ -41,17 +47,33 @@ func (meta *FileMetaData) EncodeTo(w io.Writer) error {
 
 func (meta *FileMetaData) DecodeFrom(r io.Reader) error {
 	binary.Read(r, binary.LittleEndian, &meta.allowSeeks)
+	var dbNameLen int32
+	binary.Read(r, binary.LittleEndian, &dbNameLen)
+	buf := make([]byte, dbNameLen)
+	r.Read(buf)
+	meta.dbName = string(buf)
 	binary.Read(r, binary.LittleEndian, &meta.number)
 	binary.Read(r, binary.LittleEndian, &meta.fileSize)
-	meta.smallest = key.InternalKey{}
+	meta.smallest = new(key.InternalKey)
 	meta.smallest.DecodeFrom(r)
-	meta.largest = key.InternalKey{}
+	meta.largest = new(key.InternalKey)
 	meta.largest.DecodeFrom(r)
 	return nil
 }
 
+// load a sstable file from disk
+func (meta *FileMetaData) Load() (*sstable.SSTable, error) {
+	sstable, err := sstable.Open(util.SstableFileName(meta.dbName, meta.number))
+	if err != nil {
+		return nil, err
+	}
+	return sstable, nil
+}
+
 const (
-	DefaultLevels            = 7
+	DefaultLevels = 7
+
+	// level 0 文件数量达到多少开始 compaction
 	L0_CompactionTrigger     = 4
 	L0_SlowdownWritesTrigger = 8
 )
@@ -75,11 +97,11 @@ type Version struct {
 	seq uint64
 
 	// sstable is organized by level
-	files [DefaultLevels][]FileMetaData
+	files [DefaultLevels][]*FileMetaData
 
 	// Per-level key at which the next compaction at that level should start.
 	// Either an empty string, or a valid InternalKey.
-	compactPointer [DefaultLevels][]byte
+	compactPointer [DefaultLevels]*key.InternalKey
 }
 
 func New(dbName string) *Version {
@@ -92,7 +114,7 @@ func New(dbName string) *Version {
 
 // load a version from manifest file
 func Load(dbName string, number uint64) (*Version, error) {
-	fileName := manifestFileName(dbName, number)
+	fileName := util.ManifestFileName(dbName, number)
 	fd, err := os.Open(fileName)
 	if err != nil {
 		return nil, err
@@ -126,7 +148,7 @@ func (v *Version) DecodeFrom(r io.Reader) error {
 	var numFiles int32
 	for level := range DefaultLevels {
 		binary.Read(r, binary.LittleEndian, &numFiles)
-		v.files[level] = make([]FileMetaData, numFiles)
+		v.files[level] = make([]*FileMetaData, numFiles)
 		for i := 0; i < int(numFiles); i++ {
 			v.files[level][i].DecodeFrom(r)
 		}
@@ -135,7 +157,7 @@ func (v *Version) DecodeFrom(r io.Reader) error {
 }
 
 // add a sstable file to level
-func (v *Version) addFile(level int, f FileMetaData) {
+func (v *Version) addFile(level int, f *FileMetaData) {
 	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(f.smallest.UserKey), string(f.largest.UserKey))
 
 	// sstable in level 0 comes from memtable,and is not sorted globally
@@ -149,34 +171,42 @@ func (v *Version) addFile(level int, f FileMetaData) {
 	}
 }
 
+// remove a sstable file from level
+// f must in v.files[level]
+func (v *Version) deleteFile(level int, f *FileMetaData) {
+	v.files[level] = slices.DeleteFunc(v.files[level], func(f2 *FileMetaData) bool {
+		return f2.number == f.number
+	})
+}
+
 // when a memtable is full, write it to sstable at level 0
-func (v *Version) writeLevel0Table(imm *memtable) error {
+func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 	var meta FileMetaData
 	meta.number = v.nextFileNumber
 	v.nextFileNumber++
 
 	// convert memtable to sstable
-	builder, err := newTableBuilder(sstableFileName(v.dbName, meta.number))
+	builder, err := sstable.NewTableBuilder(util.SstableFileName(v.dbName, meta.number))
 	if err != nil {
 		return err
 	}
-	iter := imm.skl.Iterator()
+	iter := imm.Iterator()
 	iter.SeekToFirst()
 	if iter.Valid() {
-		meta.smallest = iter.Key().(key.InternalKey)
+		meta.smallest = iter.Key().(*key.InternalKey)
 		for ; iter.Valid(); iter.Next() {
 			key := iter.Key().(key.InternalKey)
 			value := iter.Value().([]byte)
-			meta.largest = key
+			meta.largest = &key
 			w := new(bytes.Buffer)
 			key.EncodeTo(w)
 			builder.Add(w.Bytes(), value)
 		}
 		builder.Finish()
-		meta.fileSize = builder.fileSize
+		meta.fileSize = builder.FileSize()
 	}
 
-	v.addFile(0, meta)
+	v.addFile(0, &meta)
 	return nil
 }
 
@@ -195,7 +225,7 @@ func (v *Version) pickLevel() int {
 	compactionLevel := -1
 	bestScore := 1.0
 	score := 0.0
-	for level := 0; level < DefaultLevels-1; level++ {
+	for level := range DefaultLevels - 1 {
 		if level == 0 {
 			score = float64(len(v.files[0])) / float64(L0_CompactionTrigger)
 		} else {
@@ -211,18 +241,9 @@ func (v *Version) pickLevel() int {
 	return compactionLevel
 }
 
-// minor compact
-func (v *Version) compact() {
-	// compact level and level+1
-	compactLevel := v.pickLevel()
-	if compactLevel < 0 {
-		return
-	}
-}
-
-func totalFileSize(files []FileMetaData) uint64 {
+func totalFileSize(files []*FileMetaData) uint64 {
 	var sum uint64
-	for i := 0; i < len(files); i++ {
+	for i := range files {
 		sum += files[i].fileSize
 	}
 	return sum

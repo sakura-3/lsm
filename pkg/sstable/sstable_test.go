@@ -1,4 +1,4 @@
-package lsm
+package sstable
 
 import (
 	"fmt"
@@ -44,7 +44,7 @@ func TestFooterDecode(t *testing.T) {
 }
 
 func TestSSTableBasic(t *testing.T) {
-	tb, err := newTableBuilder("TestSSTableBasic.sst")
+	tb, err := NewTableBuilder("TestSSTableBasic.sst")
 	assert.Nil(t, err)
 	defer os.Remove("TestSSTableBasic.sst")
 
@@ -129,7 +129,7 @@ func TestSSTableBasic(t *testing.T) {
 }
 
 func TestSSTableMultipleDataBlock(t *testing.T) {
-	tb, err := newTableBuilder("TestSSTableMultipleDataBlock.sst")
+	tb, err := NewTableBuilder("TestSSTableMultipleDataBlock.sst")
 	assert.Nil(t, err)
 	defer os.Remove("TestSSTableMultipleDataBlock.sst")
 

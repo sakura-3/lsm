@@ -5,15 +5,15 @@ package skiplist
 // 这允许我们定义两个 dummy node, 即 head 和 nilNode
 // 对于所有合法 node， head < node < nilNode
 type comparable interface {
-	compare(l, r any) int
-	score(key any) float64
+	compare(l, r []byte) int
+	score(key []byte) float64
 }
 
-type CompareFunc func(l, r any) int
+type CompareFunc func(l, r []byte) int
 
-func (f CompareFunc) compare(l, r any) int {
+func (f CompareFunc) compare(l, r []byte) int {
 	return f(l, r)
 }
-func (f CompareFunc) score(key any) float64 {
+func (f CompareFunc) score(key []byte) float64 {
 	return 0
 }

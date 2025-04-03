@@ -1,4 +1,4 @@
-package lsm
+package sstable
 
 import (
 	"bytes"
@@ -59,7 +59,7 @@ type TableBuilder struct {
 	pendingIndexEntry    block.BlockHandler
 }
 
-func newTableBuilder(filename string) (*TableBuilder, error) {
+func NewTableBuilder(filename string) (*TableBuilder, error) {
 	fd, err := os.Create(filename)
 	if err != nil {
 		return nil, err
@@ -158,6 +158,10 @@ func (tb *TableBuilder) writeBlock(bb *block.BlockBuilder) (bh block.BlockHandle
 	tb.offset += bh.Size
 
 	return bh, nil
+}
+
+func (tb *TableBuilder) FileSize() uint64 {
+	return tb.fileSize
 }
 
 type SSTable struct {

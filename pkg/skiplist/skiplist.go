@@ -25,7 +25,7 @@ type Skiplist struct {
 
 func New(comp CompareFunc) *Skiplist {
 	return &Skiplist{
-		head:  newNode(maxLevel, nil, nil, -math.MaxFloat64),
+		head:  newNode(maxLevel, nil, -math.MaxFloat64),
 		tail:  nil,
 		seed:  rand.New(rand.NewSource(time.Now().UnixNano())),
 		size:  0,
@@ -34,9 +34,7 @@ func New(comp CompareFunc) *Skiplist {
 	}
 }
 
-// insert key:value into skiplist
-// if key already exist, panic
-func (s *Skiplist) Insert(key, value any) {
+func (s *Skiplist) Insert(key []byte) {
 	h := s.head
 	prev := make([]*node, maxLevel)
 	for i := range prev {
@@ -52,7 +50,7 @@ func (s *Skiplist) Insert(key, value any) {
 	}
 
 	newLevel := s.randomLevel()
-	n := newNode(newLevel, key, value, s.comp.score(key))
+	n := newNode(newLevel, key, s.comp.score(key))
 
 	n.prev = prev[0]
 	if prev[0].next[0] != nil {
@@ -71,7 +69,7 @@ func (s *Skiplist) Insert(key, value any) {
 	s.size++
 }
 
-func (s *Skiplist) Contains(key any) bool {
+func (s *Skiplist) Contains(key []byte) bool {
 	h := s.head
 	for i := s.level - 1; i >= 0; i-- {
 		h = s.findLessThan(h, i, key)
@@ -90,7 +88,7 @@ func (s *Skiplist) Iterator() *Iterator {
 	}
 }
 
-func (s *Skiplist) findLessThan(begin *node, level int, target any) *node {
+func (s *Skiplist) findLessThan(begin *node, level int, target []byte) *node {
 	h := begin
 	for next := h.next[level]; next != nil; next = h.next[level] {
 		if s.compare(next, target) >= 0 {
@@ -117,7 +115,7 @@ func (s *Skiplist) randomLevel() int {
 	return level
 }
 
-func (s *Skiplist) compare(n *node, key any) int {
+func (s *Skiplist) compare(n *node, key []byte) int {
 	if res := cmp.Compare(n.score, s.comp.score(key)); res != 0 {
 		return res
 	}

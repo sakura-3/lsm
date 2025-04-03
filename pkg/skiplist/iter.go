@@ -10,18 +10,11 @@ func (it *Iterator) Valid() bool {
 	return it.cur != nil && it.cur.key != nil
 }
 
-func (it *Iterator) Key() any {
+func (it *Iterator) Key() []byte {
 	if !it.Valid() {
 		return nil
 	}
 	return it.cur.key
-}
-
-func (it *Iterator) Value() any {
-	if !it.Valid() {
-		return nil
-	}
-	return it.cur.value
 }
 
 func (it *Iterator) Next() {
@@ -39,7 +32,7 @@ func (it *Iterator) Prev() {
 }
 
 // seek to first node that >= target
-func (it *Iterator) Seek(target any) {
+func (it *Iterator) Seek(target []byte) {
 	h := it.s.head
 	var i = it.s.level - 1
 	for i >= 0 {
