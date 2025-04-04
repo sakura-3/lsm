@@ -1,7 +1,6 @@
 package version
 
 import (
-	"bytes"
 	"container/heap"
 	"lsm/internal/key"
 	"lsm/pkg/sstable"
@@ -20,10 +19,8 @@ func NewMergeIterator(iterators []*sstable.SSTableIterator) *mergeIterator {
 	}
 	for i, it := range iterators {
 		if it.Valid() {
-			var ik key.InternalKey
-			ik.DecodeFrom(bytes.NewBuffer(it.Key()))
 			heap.Push(&mi.hp, info{
-				k:   ik,
+				k:   it.Key(),
 				idx: i,
 			})
 		}
@@ -50,17 +47,15 @@ func (it *mergeIterator) Next() {
 	it.iterators[idx].Next()
 	heap.Pop(&it.hp)
 	if it.iterators[idx].Valid() {
-		var ik key.InternalKey
-		ik.DecodeFrom(bytes.NewBuffer(it.iterators[idx].Key()))
 		heap.Push(&it.hp, info{
-			k:   ik,
+			k:   it.iterators[idx].Key(),
 			idx: idx,
 		})
 	}
 }
 
 type info struct {
-	k   key.InternalKey
+	k   []byte
 	idx int
 }
 type hp []info

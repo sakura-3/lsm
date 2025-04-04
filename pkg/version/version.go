@@ -1,7 +1,6 @@
 package version
 
 import (
-	"bytes"
 	"encoding/binary"
 	"io"
 	"lsm/internal/key"
@@ -29,36 +28,65 @@ type FileMetaData struct {
 	fileSize uint64
 
 	// Smallest/largest key in the sstable
-	smallest *key.InternalKey
-	largest  *key.InternalKey
+	// 对应 internalKey 的二进制表达
+	smallest []byte
+	largest  []byte
+}
+
+func (meta *FileMetaData) Size() int {
+	return 8 + // allowSeeks
+		4 + len(meta.dbName) + // dbName
+		8 + // number
+		8 + // fileSize
+		4 + len(meta.smallest) + // smallest
+		4 + len(meta.largest) // largest
 }
 
 // TODO error handling
-func (meta *FileMetaData) EncodeTo(w io.Writer) error {
+func (meta *FileMetaData) EncodeTo(w io.Writer) {
 	binary.Write(w, binary.LittleEndian, meta.allowSeeks)
-	binary.Write(w, binary.LittleEndian, len(meta.dbName))
-	w.Write([]byte(meta.dbName))
+	w.Write(util.LenPrefixSlice([]byte(meta.dbName)))
 	binary.Write(w, binary.LittleEndian, meta.number)
 	binary.Write(w, binary.LittleEndian, meta.fileSize)
-	meta.smallest.EncodeTo(w)
-	meta.largest.EncodeTo(w)
-	return nil
+	w.Write(util.LenPrefixSlice(meta.smallest))
+	w.Write(util.LenPrefixSlice(meta.largest))
 }
 
-func (meta *FileMetaData) DecodeFrom(r io.Reader) error {
-	binary.Read(r, binary.LittleEndian, &meta.allowSeeks)
-	var dbNameLen int32
-	binary.Read(r, binary.LittleEndian, &dbNameLen)
-	buf := make([]byte, dbNameLen)
-	r.Read(buf)
-	meta.dbName = string(buf)
-	binary.Read(r, binary.LittleEndian, &meta.number)
-	binary.Read(r, binary.LittleEndian, &meta.fileSize)
-	meta.smallest = new(key.InternalKey)
-	meta.smallest.DecodeFrom(r)
-	meta.largest = new(key.InternalKey)
-	meta.largest.DecodeFrom(r)
-	return nil
+func (meta *FileMetaData) DecodeFrom(r io.Reader) {
+	var (
+		allowSeeks uint64
+		lenPrefix  = make([]byte, 4)
+		dbName     []byte
+		number     uint64
+		fileSize   uint64
+		smallest   []byte
+		largest    []byte
+	)
+
+	binary.Read(r, binary.LittleEndian, &allowSeeks)
+
+	r.Read(lenPrefix)
+	dbName = make([]byte, binary.LittleEndian.Uint32(lenPrefix))
+	r.Read(dbName)
+
+	binary.Read(r, binary.LittleEndian, &number)
+
+	binary.Read(r, binary.LittleEndian, &fileSize)
+
+	r.Read(lenPrefix)
+	smallest = make([]byte, binary.LittleEndian.Uint32(lenPrefix))
+	r.Read(smallest)
+
+	r.Read(lenPrefix)
+	largest = make([]byte, binary.LittleEndian.Uint32(lenPrefix))
+	r.Read(largest)
+
+	meta.allowSeeks = allowSeeks
+	meta.dbName = string(dbName)
+	meta.number = number
+	meta.fileSize = fileSize
+	meta.smallest = smallest
+	meta.largest = largest
 }
 
 // load a sstable file from disk
@@ -101,7 +129,7 @@ type Version struct {
 
 	// Per-level key at which the next compaction at that level should start.
 	// Either an empty string, or a valid InternalKey.
-	compactPointer [DefaultLevels]*key.InternalKey
+	compactPointer [DefaultLevels][]byte
 }
 
 func New(dbName string) *Version {
@@ -158,7 +186,10 @@ func (v *Version) DecodeFrom(r io.Reader) error {
 
 // add a sstable file to level
 func (v *Version) addFile(level int, f *FileMetaData) {
-	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(f.smallest.UserKey), string(f.largest.UserKey))
+	var ik1, ik2 key.InternalKey
+	ik1.DecodeFrom(f.smallest)
+	ik2.DecodeFrom(f.largest)
+	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(ik1.UserKey), string(ik2.UserKey))
 
 	// sstable in level 0 comes from memtable,and is not sorted globally
 	if level == 0 {
@@ -181,8 +212,11 @@ func (v *Version) deleteFile(level int, f *FileMetaData) {
 
 // when a memtable is full, write it to sstable at level 0
 func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
-	var meta FileMetaData
-	meta.number = v.nextFileNumber
+	meta := FileMetaData{
+		dbName:   v.dbName,
+		number:   v.nextFileNumber,
+		fileSize: 0,
+	}
 	v.nextFileNumber++
 
 	// convert memtable to sstable
@@ -193,14 +227,11 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 	iter := imm.Iterator()
 	iter.SeekToFirst()
 	if iter.Valid() {
-		meta.smallest = iter.Key().(*key.InternalKey)
+		meta.smallest = iter.Key()
 		for ; iter.Valid(); iter.Next() {
-			key := iter.Key().(key.InternalKey)
-			value := iter.Value().([]byte)
-			meta.largest = &key
-			w := new(bytes.Buffer)
-			key.EncodeTo(w)
-			builder.Add(w.Bytes(), value)
+			key := iter.Key()
+			meta.largest = key
+			builder.Add(key, nil)
 		}
 		builder.Finish()
 		meta.fileSize = builder.FileSize()

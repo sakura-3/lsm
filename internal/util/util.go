@@ -1,6 +1,9 @@
 package util
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 func ManifestFileName(dbname string, number uint64) string {
 	return fmt.Sprintf("%s/MANIFEST-%06d", dbname, number)
@@ -12,4 +15,11 @@ func fileName(dbname string, number uint64, suffix string) string {
 
 func SstableFileName(dbname string, number uint64) string {
 	return fileName(dbname, number, "ldb")
+}
+
+func LenPrefixSlice(data []byte) []byte {
+	ret := make([]byte, len(data)+4)
+	binary.LittleEndian.PutUint32(ret, uint32(len(data)))
+	copy(ret[4:], data)
+	return ret
 }

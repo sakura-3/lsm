@@ -24,7 +24,7 @@ func (mem *Memtable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue [
 	ik := key.New(userKey, userValue, seq, tp)
 
 	mem.skl.Insert(ik.EncodeTo())
-	mem.size += ik.Size() + uint64(len(userValue))
+	mem.size += ik.Size()
 }
 
 // 返回 <= seq 的最新记录

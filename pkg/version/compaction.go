@@ -1,7 +1,6 @@
 package version
 
 import (
-	"bytes"
 	"fmt"
 	"lsm/internal/key"
 	"lsm/pkg/sstable"
@@ -36,6 +35,44 @@ func (c *compaction) String() string {
 
 func (c *compaction) isTrivialMove() bool {
 	return len(c.inputs[0]) == 1 && len(c.inputs[1]) == 0
+}
+
+// 返回 inputs 经过合并后的结果
+// 合并后的数据会被写入到 level+1 中
+// 同时 inputs 中的文件会被删除
+func (c *compaction) output() ([]*FileMetaData, error) {
+	// just move file from c.level to c.level+1
+	if c.isTrivialMove() {
+		return c.inputs[0], nil
+	}
+
+	iters := make([]*sstable.SSTableIterator, 0, len(c.inputs[0])+len(c.inputs[1]))
+	for _, f := range c.inputs[0] {
+		st, err := f.Load()
+		if err != nil {
+			return nil, err
+		}
+		iters = append(iters, st.NewIterator())
+	}
+
+	for _, f := range c.inputs[1] {
+		st, err := f.Load()
+		if err != nil {
+			return nil, err
+		}
+		iters = append(iters, st.NewIterator())
+	}
+
+	mi := NewMergeIterator(iters)
+
+	var prevKey *key.InternalKey = nil
+	for mi.Valid() {
+		prevKey.DecodeFrom(mi.Key())
+		mi.Next()
+	}
+
+	// TODO 
+	return nil, nil
 }
 
 func (v *Version) pickCompactionLevel() int {
@@ -80,7 +117,7 @@ func (v *Version) pickCompaction() *compaction {
 
 	// set inputs[0]
 
-	var smallest, largest *key.InternalKey
+	var smallest, largest []byte
 	// files in level 0 is not sorted globally
 	// so pick up all
 	if level == 0 {
@@ -130,38 +167,6 @@ func (v *Version) compact() bool {
 
 	logrus.Debugf("compact begin")
 	logrus.Debug(c.String())
-
-	// just move file from c.level to c.level+1
-	if c.isTrivialMove() {
-		v.deleteFile(c.level, c.inputs[0][0])
-		v.addFile(c.level+1, c.inputs[0][0])
-		return true
-	}
-
-	iters := make([]*sstable.SSTableIterator, 0, len(c.inputs[0])+len(c.inputs[1]))
-	for _, f := range c.inputs[0] {
-		st, err := f.Load()
-		if err != nil {
-			return false
-		}
-		iters = append(iters, st.NewIterator())
-	}
-
-	for _, f := range c.inputs[1] {
-		st, err := f.Load()
-		if err != nil {
-			return false
-		}
-		iters = append(iters, st.NewIterator())
-	}
-
-	mi := NewMergeIterator(iters)
-
-	var prevKey *key.InternalKey = nil
-	for mi.Valid() {
-		prevKey.DecodeFrom(bytes.NewBuffer(mi.Key()))
-		mi.Next()
-	}
 
 	return true
 }
