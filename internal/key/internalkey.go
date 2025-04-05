@@ -35,6 +35,10 @@ func New(userKey, userValue []byte, seq uint64, tp KeyType) InternalKey {
 	return ik
 }
 
+func NewLookupKey(userKey []byte, seq uint64) InternalKey {
+	return New(userKey, nil, seq, KTypeValue)
+}
+
 func (ik InternalKey) Size() uint64 {
 	return 4 + uint64(len(ik.UserKey)) + // userKey
 		4 + uint64(len(ik.UserValue)) + // userValue

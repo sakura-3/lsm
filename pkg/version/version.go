@@ -2,6 +2,7 @@ package version
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"lsm/internal/key"
 	"lsm/internal/util"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 )
@@ -29,8 +31,8 @@ type FileMetaData struct {
 
 	// Smallest/largest key in the sstable
 	// 对应 internalKey 的二进制表达
-	smallest []byte
-	largest  []byte
+	smallest *key.InternalKey
+	largest  *key.InternalKey
 }
 
 func (meta *FileMetaData) Size() int {
@@ -38,8 +40,8 @@ func (meta *FileMetaData) Size() int {
 		4 + len(meta.dbName) + // dbName
 		8 + // number
 		8 + // fileSize
-		4 + len(meta.smallest) + // smallest
-		4 + len(meta.largest) // largest
+		4 + len(meta.smallest.EncodeTo()) + // smallest
+		4 + len(meta.largest.EncodeTo()) // largest
 }
 
 // TODO error handling
@@ -48,8 +50,8 @@ func (meta *FileMetaData) EncodeTo(w io.Writer) {
 	w.Write(util.LenPrefixSlice([]byte(meta.dbName)))
 	binary.Write(w, binary.LittleEndian, meta.number)
 	binary.Write(w, binary.LittleEndian, meta.fileSize)
-	w.Write(util.LenPrefixSlice(meta.smallest))
-	w.Write(util.LenPrefixSlice(meta.largest))
+	w.Write(util.LenPrefixSlice(meta.smallest.EncodeTo()))
+	w.Write(util.LenPrefixSlice(meta.largest.EncodeTo()))
 }
 
 func (meta *FileMetaData) DecodeFrom(r io.Reader) {
@@ -85,8 +87,8 @@ func (meta *FileMetaData) DecodeFrom(r io.Reader) {
 	meta.dbName = string(dbName)
 	meta.number = number
 	meta.fileSize = fileSize
-	meta.smallest = smallest
-	meta.largest = largest
+	meta.smallest.DecodeFrom(smallest)
+	meta.largest.DecodeFrom(largest)
 }
 
 // load a sstable file from disk
@@ -104,6 +106,9 @@ const (
 	// level 0 文件数量达到多少开始 compaction
 	L0_CompactionTrigger     = 4
 	L0_SlowdownWritesTrigger = 8
+
+	// sstable 文件大小, 1GB
+	MaxSSTableFileSize = 1 << 30
 )
 
 // Version is a set of sstable files at a particular point in time.
@@ -150,14 +155,14 @@ func Load(dbName string, number uint64) (*Version, error) {
 	defer fd.Close()
 
 	v := New(dbName)
-	err = v.DecodeFrom(fd)
+	err = v.decodeFrom(fd)
 	if err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func (v *Version) EncodeTo(w io.Writer) error {
+func (v *Version) encodeTo(w io.Writer) error {
 	binary.Write(w, binary.LittleEndian, v.nextFileNumber)
 	binary.Write(w, binary.LittleEndian, v.seq)
 	for level := range DefaultLevels {
@@ -170,7 +175,7 @@ func (v *Version) EncodeTo(w io.Writer) error {
 	return nil
 }
 
-func (v *Version) DecodeFrom(r io.Reader) error {
+func (v *Version) decodeFrom(r io.Reader) error {
 	binary.Read(r, binary.LittleEndian, &v.nextFileNumber)
 	binary.Read(r, binary.LittleEndian, &v.seq)
 	var numFiles int32
@@ -186,17 +191,14 @@ func (v *Version) DecodeFrom(r io.Reader) error {
 
 // add a sstable file to level
 func (v *Version) addFile(level int, f *FileMetaData) {
-	var ik1, ik2 key.InternalKey
-	ik1.DecodeFrom(f.smallest)
-	ik2.DecodeFrom(f.largest)
-	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(ik1.UserKey), string(ik2.UserKey))
+	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(f.smallest.UserKey), string(f.largest.UserKey))
 
 	// sstable in level 0 comes from memtable,and is not sorted globally
 	if level == 0 {
 		v.files[level] = append(v.files[level], f)
 	} else {
 		idx := sort.Search(len(v.files[level]), func(i int) bool {
-			return key.InternalKeyCompareFunc(v.files[level][i].smallest, f.smallest) >= 0
+			return key.InternalKeyCompareFunc(v.files[level][i].smallest.EncodeTo(), f.smallest.EncodeTo()) >= 0
 		})
 		v.files[level] = slices.Insert(v.files[level], idx, f)
 	}
@@ -216,6 +218,8 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 		dbName:   v.dbName,
 		number:   v.nextFileNumber,
 		fileSize: 0,
+		smallest: new(key.InternalKey),
+		largest:  new(key.InternalKey),
 	}
 	v.nextFileNumber++
 
@@ -227,10 +231,10 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 	iter := imm.Iterator()
 	iter.SeekToFirst()
 	if iter.Valid() {
-		meta.smallest = iter.Key()
+		meta.smallest.DecodeFrom(iter.Key())
 		for ; iter.Valid(); iter.Next() {
 			key := iter.Key()
-			meta.largest = key
+			meta.largest.DecodeFrom(key)
 			builder.Add(key, nil)
 		}
 		builder.Finish()
@@ -241,35 +245,35 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 	return nil
 }
 
-func (v *Version) pickLevel() int {
-	// We treat level-0 specially by bounding the number of files
-	// instead of number of bytes for two reasons:
-	//
-	// (1) With larger write-buffer sizes, it is nice not to do too
-	// many level-0 compactions.
-	//
-	// (2) The files in level-0 are merged on every read and
-	// therefore we wish to avoid too many files when the individual
-	// file size is small (perhaps because of a small write-buffer
-	// setting, or very high compression ratios, or lots of
-	// overwrites/deletions).
-	compactionLevel := -1
-	bestScore := 1.0
-	score := 0.0
-	for level := range DefaultLevels - 1 {
-		if level == 0 {
-			score = float64(len(v.files[0])) / float64(L0_CompactionTrigger)
-		} else {
-			score = float64(totalFileSize(v.files[level])) / maxBytesForLevel(level)
-		}
+func (v *Version) get(userKey []byte) ([]byte, bool) {
+	// 获取最新的 value
+	// lookupKey := key.NewLookupKey(userKey, math.MaxUint64)
 
-		if score > bestScore {
-			bestScore = score
-			compactionLevel = level
+	// // level 0 不是全局有序，且存在重合,需要全局扫描
+	// for _,f:=range v.files[0] {
+	// }
+
+	// TODO
+	return nil, false
+}
+
+func (v *Version) debug() string {
+	var sb strings.Builder
+
+	for level := range DefaultLevels {
+		sb.WriteString(fmt.Sprintf("level %d: ", level))
+		for i := range v.files[level] {
+			sb.WriteString(fmt.Sprintf("%d ", v.files[level][i].number))
 		}
+		sb.WriteString("\n")
 	}
-	logrus.Debugf("pick level %d", compactionLevel)
-	return compactionLevel
+
+	return sb.String()
+}
+
+func (v *Version) NextSeq() uint64 {
+	v.seq++
+	return v.seq
 }
 
 func totalFileSize(files []*FileMetaData) uint64 {

@@ -29,10 +29,9 @@ func (mem *Memtable) Add(seq uint64, tp key.KeyType, userKey []byte, userValue [
 
 // 返回 <= seq 的最新记录
 func (mem *Memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
-	// tp 值无意义
-	expectKey := key.New(userKey, nil, seq, key.KTypeDeletion)
+	lookup := key.NewLookupKey(userKey, seq)
 	iter := mem.skl.Iterator()
-	iter.Seek(expectKey.EncodeTo())
+	iter.Seek(lookup.EncodeTo())
 	if !iter.Valid() {
 		return nil, false
 	}
@@ -40,7 +39,7 @@ func (mem *Memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 	var exactKey key.InternalKey
 	exactKey.DecodeFrom(iter.Key())
 	// 只需要比较 userKey,seek 保证返回的是 seq 最大的记录
-	if bytes.Equal(expectKey.UserKey, exactKey.UserKey) {
+	if bytes.Equal(userKey, exactKey.UserKey) {
 		switch exactKey.Type {
 		case key.KTypeValue:
 			return exactKey.UserValue, true

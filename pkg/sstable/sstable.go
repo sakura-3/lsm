@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"lsm/internal/block"
+	"lsm/internal/key"
 	"os"
 )
 
@@ -200,16 +201,27 @@ func Open(filename string) (*SSTable, error) {
 	}, nil
 }
 
-func (s *SSTable) Get(key []byte) ([]byte, bool) {
+func (s *SSTable) Get(lookupKey []byte) ([]byte, bool) {
 	iter := s.NewIterator()
-	iter.Seek(key)
+	iter.Seek(lookupKey)
 	if !iter.Valid() {
 		return nil, false
 	}
-	if !bytes.Equal(iter.Key(), key) {
+
+	var internalKey key.InternalKey
+	internalKey.DecodeFrom(iter.Key())
+	if !bytes.Equal(internalKey.UserKey, lookupKey) {
 		return nil, false
 	}
-	return iter.Value(), true
+	// TODO 引入 snapshot 后考虑是否可见
+
+	if internalKey.Type == key.KTypeDeletion {
+		return nil, false
+	}
+
+	// userKey 和 userValue 会合并为 internalKey
+	// 作为 data block 的 key,对应的 value 为 nil
+	return internalKey.UserValue, true
 }
 
 type SSTableIterator struct {

@@ -37,11 +37,6 @@ func (it *mergeIterator) Key() []byte {
 	return it.iterators[idx].Key()
 }
 
-func (it *mergeIterator) Value() []byte {
-	idx := it.hp[0].idx
-	return it.iterators[idx].Key()
-}
-
 func (it *mergeIterator) Next() {
 	idx := it.hp[0].idx
 	it.iterators[idx].Next()
