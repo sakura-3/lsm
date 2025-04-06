@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
+	"fmt"
 )
 
 type KeyType byte
@@ -96,6 +97,10 @@ func (ik *InternalKey) DecodeFrom(data []byte) {
 	if offset != len(data) {
 		panic("offset!= len(data)")
 	}
+}
+
+func (ik *InternalKey) Debug() string {
+	return fmt.Sprintf("InternalKey{UserKey: %s, UserValue: %s, Seq: %d, Type: %d}", ik.UserKey, ik.UserValue, ik.Seq, ik.Type)
 }
 
 // 按 UserKey 升序,Seq 降序

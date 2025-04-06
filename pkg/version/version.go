@@ -1,6 +1,7 @@
 package version
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"lsm/internal/util"
 	"lsm/pkg/memtable"
 	"lsm/pkg/sstable"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -247,13 +249,54 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 
 func (v *Version) get(userKey []byte) ([]byte, bool) {
 	// 获取最新的 value
-	// lookupKey := key.NewLookupKey(userKey, math.MaxUint64)
+	lookupKey := key.NewLookupKey(userKey, math.MaxUint64)
 
-	// // level 0 不是全局有序，且存在重合,需要全局扫描
-	// for _,f:=range v.files[0] {
-	// }
+	// level 0 不是全局有序，且存在重合,需要全局扫描
+	for _, f := range v.files[0] {
+		if bytes.Compare(userKey, f.smallest.UserKey) < 0 || bytes.Compare(userKey, f.largest.UserKey) > 0 {
+			continue
+		}
 
-	// TODO
+		sstable, err := f.Load()
+		if err != nil {
+			logrus.Errorf("load sstable %d error:%v", f.number, err)
+			return nil, false
+		}
+
+		value, ok := sstable.Get(lookupKey)
+		if ok {
+			return value, true
+		}
+	}
+
+	// 其它 level 内部是全局有序的,可以通过 二分查找 快速定位
+	// 低 level 的数据比高 level 的数据更新,因此在低 level 中找到后就无需查找高 level
+	for level := 1; level < DefaultLevels; level++ {
+		if len(v.files[level]) == 0 {
+			continue
+		}
+
+		// 二分查找
+		idx := sort.Search(len(v.files[level]), func(i int) bool {
+			return bytes.Compare(v.files[level][i].largest.UserKey, userKey) >= 0
+		})
+
+		if idx == len(v.files[level]) {
+			continue
+		}
+
+		sstable, err := v.files[level][idx].Load()
+		if err != nil {
+			logrus.Errorf("load sstable %d error:%v", v.files[level][idx].number, err)
+			return nil, false
+		}
+
+		value, ok := sstable.Get(lookupKey)
+		if ok {
+			return value, true
+		}
+	}
+
 	return nil, false
 }
 

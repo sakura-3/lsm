@@ -1,14 +1,24 @@
 package sstable
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"lsm/internal/block"
+	"lsm/internal/key"
+	"math"
+	"math/rand/v2"
 	"os"
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
+
+func init() {
+	// logrus.SetLevel(logrus.DebugLevel)
+	logrus.SetLevel(logrus.FatalLevel)
+}
 
 func TestFooterEncode(t *testing.T) {
 	f := Footer{
@@ -149,4 +159,67 @@ func TestSSTableMultipleDataBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, 782, sstable.index.Size())
+}
+
+func TestSSTableGet(t *testing.T) {
+	tb, err := NewTableBuilder("TestSSTableGet.sst")
+	assert.Nil(t, err)
+	defer os.Remove("TestSSTableGet.sst")
+
+	userKeyFormat := "key-%10d"
+	userValueFormat := "value-%10d"
+	keyN := 10
+	deleteKeyN := keyN / 10
+	deleteMap := make(map[int]struct{})
+	for range deleteKeyN {
+		rd := rand.IntN(keyN)
+		deleteMap[rd] = struct{}{}
+	}
+
+	for i := range keyN {
+		userKey := fmt.Appendf(nil, userKeyFormat, i)
+		userValue := fmt.Appendf(nil, userValueFormat, i)
+		keyForInsert := key.New(userKey, userValue, uint64(i), key.KTypeValue)
+		err := tb.Add(keyForInsert.EncodeTo(), nil)
+		assert.Nil(t, err)
+
+		// 如果对同一个 key 的插入和删除使用同一个 seq,是否可见?
+		if _, ok := deleteMap[i]; ok {
+			keyForDelete := key.New(userKey, nil, uint64(i+1), key.KTypeDeletion)
+			err := tb.Add(keyForDelete.EncodeTo(), nil)
+			assert.Nil(t, err)
+		}
+	}
+	tb.Finish()
+
+	st, err := Open("TestSSTableGet.sst")
+	assert.Nil(t, err)
+
+	iter := st.NewIterator()
+	assert.True(t, iter.Valid())
+	for ; iter.Valid(); iter.Next() {
+		var internalKey key.InternalKey
+		internalKey.DecodeFrom(iter.Key())
+		t.Logf("key: %s, value: %s,seq: %d,type:%d\n", internalKey.UserKey, internalKey.UserValue, internalKey.Seq, internalKey.Type)
+	}
+
+	for i := range keyN {
+		lookupKey := key.NewLookupKey(fmt.Appendf(nil, userKeyFormat, i), math.MaxUint64)
+		expected := fmt.Appendf(nil, userValueFormat, i)
+
+		actual, ok := st.Get(lookupKey)
+		if _, delete := deleteMap[i]; delete {
+			// t.Log(string(actual))
+			// var actualKey key.InternalKey
+			// actualKey.DecodeFrom(actual)
+			// t.Logf("key: %s, value: %s,seq: %d,type:%d\n", actualKey.UserKey, actualKey.UserValue, actualKey.Seq, actualKey.Type)
+			assert.False(t, ok)
+			continue
+		}
+		assert.True(t, ok)
+		// assert.Equal(t, expected, actual)
+		if !bytes.Equal(expected, actual) {
+			t.Errorf("expected: %s, actual: %s\n", expected, actual)
+		}
+	}
 }

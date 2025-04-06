@@ -6,6 +6,8 @@ import (
 	"lsm/internal/block"
 	"lsm/internal/key"
 	"os"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -201,16 +203,18 @@ func Open(filename string) (*SSTable, error) {
 	}, nil
 }
 
-func (s *SSTable) Get(lookupKey []byte) ([]byte, bool) {
+func (s *SSTable) Get(lookupKey key.InternalKey) ([]byte, bool) {
 	iter := s.NewIterator()
-	iter.Seek(lookupKey)
+	iter.Seek(lookupKey.EncodeTo())
 	if !iter.Valid() {
 		return nil, false
 	}
 
 	var internalKey key.InternalKey
 	internalKey.DecodeFrom(iter.Key())
-	if !bytes.Equal(internalKey.UserKey, lookupKey) {
+
+	logrus.Debugf("lookupKey:%s,internalKey:%s\n", lookupKey.Debug(), internalKey.Debug())
+	if !bytes.Equal(internalKey.UserKey, lookupKey.UserKey) {
 		return nil, false
 	}
 	// TODO 引入 snapshot 后考虑是否可见
@@ -232,10 +236,18 @@ type SSTableIterator struct {
 }
 
 func (s *SSTable) NewIterator() *SSTableIterator {
-	return &SSTableIterator{
+	iter := &SSTableIterator{
 		sst:            s,
 		indexBlockIter: s.index.NewIterator(),
 	}
+	// load first data block
+	if iter.indexBlockIter.Valid() {
+		if err := iter.loadDataBlockFromIndex(); err != nil {
+			panic(err)
+		}
+	}
+
+	return iter
 }
 
 // seek to the first position where the key >= target
@@ -253,13 +265,9 @@ func (si *SSTableIterator) Seek(target []byte) {
 	}
 
 	// load data block
-	var bh block.BlockHandler
-	bh.DecodeFrom(si.indexBlockIter.Value())
-	dataBlock, err := block.NewBlock(si.sst.fd, bh)
-	if err != nil {
-		return
+	if err := si.loadDataBlockFromIndex(); err != nil {
+		panic(err)
 	}
-	si.dataBlockIter = dataBlock.NewIterator()
 
 	si.dataBlockIter.Seek(target)
 }
@@ -283,13 +291,21 @@ func (si *SSTableIterator) Next() {
 	if !si.dataBlockIter.Valid() {
 		si.indexBlockIter.Next()
 		if si.indexBlockIter.Valid() {
-			var bh block.BlockHandler
-			bh.DecodeFrom(si.indexBlockIter.Value())
-			dataBlock, err := block.NewBlock(si.sst.fd, bh)
-			if err != nil {
-				return
+			if err := si.loadDataBlockFromIndex(); err != nil {
+				panic(err)
 			}
-			si.dataBlockIter = dataBlock.NewIterator()
 		}
 	}
+}
+
+// require indexBlockIter.Valid()
+func (si *SSTableIterator) loadDataBlockFromIndex() error {
+	var bh block.BlockHandler
+	bh.DecodeFrom(si.indexBlockIter.Value())
+	dataBlock, err := block.NewBlock(si.sst.fd, bh)
+	if err != nil {
+		return err
+	}
+	si.dataBlockIter = dataBlock.NewIterator()
+	return nil
 }
