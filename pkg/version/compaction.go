@@ -39,6 +39,7 @@ func (c *compaction) isTrivialMove() bool {
 	return len(c.inputs[0]) == 1 && len(c.inputs[1]) == 0
 }
 
+// copy from leveldb/db/version_set.cc VersionSet::Finalize()
 func (v *Version) pickCompactionLevel() int {
 	// We treat level-0 specially by bounding the number of files
 	// instead of number of bytes for two reasons:
