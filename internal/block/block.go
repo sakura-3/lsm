@@ -1,8 +1,8 @@
 package block
 
 import (
-	"bytes"
 	"encoding/binary"
+	"lsm/internal/key"
 	"os"
 	"sort"
 )
@@ -87,7 +87,7 @@ func (bi *BlockIterator) Rewind() {
 // Valid() is false after this call iff such position does not exist
 func (bi *BlockIterator) Seek(target []byte) {
 	idx := sort.Search(len(bi.block.keys), func(i int) bool {
-		return bytes.Compare(bi.block.keys[i], target) >= 0
+		return key.InternalKeyCompareFunc(bi.block.keys[i], target) >= 0
 	})
 	bi.index = idx
 }

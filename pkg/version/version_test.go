@@ -3,13 +3,19 @@ package version
 import (
 	"fmt"
 	"lsm/internal/key"
+	"lsm/pkg/memtable"
 	"lsm/pkg/sstable"
+	"math"
 	"math/rand/v2"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// func init() {
+// 	logrus.SetLevel(logrus.DebugLevel)
+// }
 
 func TestMergeIteratorBasic(t *testing.T) {
 	sbs := make([]*sstable.TableBuilder, 3)
@@ -61,4 +67,44 @@ func TestMergeIteratorBasic(t *testing.T) {
 		idx++
 	}
 	assert.Equal(t, keyN, idx)
+}
+
+func TestWriteLevel0(t *testing.T) {
+	const dbName = "TestWriteLevel0"
+	// 1KB
+	imm := memtable.NewMemtable(1024)
+	v := New(dbName)
+	defer os.RemoveAll(dbName)
+
+	idx := 0
+	deleted := map[int]bool{}
+	for !imm.Full() {
+		imm.Add(v.NextSeq(), key.KTypeValue, fmt.Appendf(nil, "userkey-%10d", idx), fmt.Appendf(nil, "uservalue-%10d", idx))
+		if rand.Float64() < 0.25 {
+			imm.Add(v.NextSeq(), key.KTypeDeletion, fmt.Appendf(nil, "userkey-%10d", idx), nil)
+			deleted[idx] = true
+		}
+		idx++
+	}
+	t.Logf("insert %d keys,deleted=%v,seq=%d", idx, deleted, v.seq)
+
+	err := v.WriteLevel0Table(imm)
+	assert.Nil(t, err)
+
+	t.Log(v.Debug())
+
+	for i := range idx {
+		userkey := fmt.Appendf(nil, "userkey-%10d", i)
+		userValue, ok := v.Get(userkey, math.MaxUint64)
+		if deleted[i] {
+			assert.False(t, ok)
+		} else {
+			assert.True(t, ok)
+			assert.Equal(t, fmt.Appendf(nil, "uservalue-%10d", i), userValue)
+		}
+	}
+}
+
+func TestCompact(t *testing.T) {
+	// TODO
 }

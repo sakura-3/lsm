@@ -5,6 +5,10 @@ import (
 	"fmt"
 )
 
+func CurrentFileName(dbname string) string {
+	return dbname + "/CURRENT"
+}
+
 func ManifestFileName(dbname string, number uint64) string {
 	return fmt.Sprintf("%s/MANIFEST-%06d", dbname, number)
 }
@@ -15,6 +19,10 @@ func fileName(dbname string, number uint64, suffix string) string {
 
 func SstableFileName(dbname string, number uint64) string {
 	return fileName(dbname, number, "ldb")
+}
+
+func TempFileName(dbname string, number uint64) string {
+	return fileName(dbname, number, "dbtmp")
 }
 
 func LenPrefixSlice(data []byte) []byte {

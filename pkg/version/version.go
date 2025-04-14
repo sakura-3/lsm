@@ -9,7 +9,6 @@ import (
 	"lsm/internal/util"
 	"lsm/pkg/memtable"
 	"lsm/pkg/sstable"
-	"math"
 	"os"
 	"slices"
 	"sort"
@@ -137,13 +136,19 @@ type Version struct {
 	// Per-level key at which the next compaction at that level should start.
 	// Either an empty string, or a valid InternalKey.
 	compactPointer [DefaultLevels][]byte
+
+	maxFileSize uint64
 }
 
 func New(dbName string) *Version {
+	if err := os.MkdirAll(dbName, 0755); err != nil {
+		panic(err)
+	}
 	return &Version{
 		dbName:         dbName,
 		seq:            0,
 		nextFileNumber: 1,
+		maxFileSize:    MaxSSTableFileSize,
 	}
 }
 
@@ -162,6 +167,19 @@ func Load(dbName string, number uint64) (*Version, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+func (v *Version) Save() (uint64, error) {
+	tmp := v.nextFileNumber
+	fileName := util.ManifestFileName(v.dbName, v.nextFileNumber)
+	v.nextFileNumber++
+	file, err := os.Create(fileName)
+	if err != nil {
+		return tmp, err
+	}
+	defer file.Close()
+	v.encodeTo(file)
+	return tmp, nil
 }
 
 func (v *Version) encodeTo(w io.Writer) error {
@@ -184,7 +202,7 @@ func (v *Version) decodeFrom(r io.Reader) error {
 	for level := range DefaultLevels {
 		binary.Read(r, binary.LittleEndian, &numFiles)
 		v.files[level] = make([]*FileMetaData, numFiles)
-		for i := 0; i < int(numFiles); i++ {
+		for i := range int(numFiles) {
 			v.files[level][i].DecodeFrom(r)
 		}
 	}
@@ -193,7 +211,7 @@ func (v *Version) decodeFrom(r io.Reader) error {
 
 // add a sstable file to level
 func (v *Version) addFile(level int, f *FileMetaData) {
-	logrus.Debugf("addFile, level:%d, fileNumber:%d, %s-%s", level, f.number, string(f.smallest.UserKey), string(f.largest.UserKey))
+	logrus.Debugf("addFile, level:%d, fileNumber:%d, [%s,%s]", level, f.number, string(f.smallest.UserKey), string(f.largest.UserKey))
 
 	// sstable in level 0 comes from memtable,and is not sorted globally
 	if level == 0 {
@@ -215,7 +233,7 @@ func (v *Version) deleteFile(level int, f *FileMetaData) {
 }
 
 // when a memtable is full, write it to sstable at level 0
-func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
+func (v *Version) WriteLevel0Table(imm *memtable.Memtable) error {
 	meta := FileMetaData{
 		dbName:   v.dbName,
 		number:   v.nextFileNumber,
@@ -239,7 +257,9 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 			meta.largest.DecodeFrom(key)
 			builder.Add(key, nil)
 		}
-		builder.Finish()
+		if err := builder.Finish(); err != nil {
+			return err
+		}
 		meta.fileSize = builder.FileSize()
 	}
 
@@ -247,9 +267,9 @@ func (v *Version) writeLevel0Table(imm *memtable.Memtable) error {
 	return nil
 }
 
-func (v *Version) get(userKey []byte) ([]byte, bool) {
+func (v *Version) Get(userKey []byte, seq uint64) ([]byte, bool) {
 	// 获取最新的 value
-	lookupKey := key.NewLookupKey(userKey, math.MaxUint64)
+	lookupKey := key.NewLookupKey(userKey, seq)
 
 	// level 0 不是全局有序，且存在重合,需要全局扫描
 	for _, f := range v.files[0] {
@@ -300,9 +320,10 @@ func (v *Version) get(userKey []byte) ([]byte, bool) {
 	return nil, false
 }
 
-func (v *Version) debug() string {
+func (v *Version) Debug() string {
 	var sb strings.Builder
 
+	sb.WriteString("\n")
 	for level := range DefaultLevels {
 		sb.WriteString(fmt.Sprintf("level %d: ", level))
 		for i := range v.files[level] {
@@ -317,6 +338,22 @@ func (v *Version) debug() string {
 func (v *Version) NextSeq() uint64 {
 	v.seq++
 	return v.seq
+}
+
+func (v *Version) NumLevelFiles(l int) int {
+	return len(v.files[l])
+}
+
+func (v *Version) Copy() *Version {
+	var c Version
+
+	c.nextFileNumber = v.nextFileNumber
+	c.seq = v.seq
+	for level := 0; level < DefaultLevels; level++ {
+		c.files[level] = make([]*FileMetaData, len(v.files[level]))
+		copy(c.files[level], v.files[level])
+	}
+	return &c
 }
 
 func totalFileSize(files []*FileMetaData) uint64 {

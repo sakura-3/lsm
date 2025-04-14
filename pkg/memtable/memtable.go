@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"lsm/internal/key"
 	"lsm/pkg/skiplist"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Memtable struct {
@@ -38,6 +40,9 @@ func (mem *Memtable) Get(userKey []byte, seq uint64) (value []byte, ok bool) {
 
 	var exactKey key.InternalKey
 	exactKey.DecodeFrom(iter.Key())
+
+	logrus.Debugf("memtable get, lookupKey=%s, exactKey=%s", lookup.Debug(), exactKey.Debug())
+
 	// 只需要比较 userKey,seek 保证返回的是 seq 最大的记录
 	if bytes.Equal(userKey, exactKey.UserKey) {
 		switch exactKey.Type {

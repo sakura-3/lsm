@@ -192,7 +192,7 @@ func (v *Version) getCompactOutput(c *compaction) ([]*FileMetaData, error) {
 			builder.Add(mi.Key(), nil)
 
 			// 这里的 FileSize 只是估计值, 实际值更大
-			if builder.FileSize() > MaxSSTableFileSize {
+			if builder.FileSize() > v.maxFileSize {
 				break
 			}
 		}
@@ -208,7 +208,7 @@ func (v *Version) getCompactOutput(c *compaction) ([]*FileMetaData, error) {
 }
 
 // major compact
-func (v *Version) compact() bool {
+func (v *Version) Compact() bool {
 	c := v.pickCompaction()
 	if c == nil {
 		return false

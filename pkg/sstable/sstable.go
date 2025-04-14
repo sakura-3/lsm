@@ -213,7 +213,7 @@ func (s *SSTable) Get(lookupKey key.InternalKey) ([]byte, bool) {
 	var internalKey key.InternalKey
 	internalKey.DecodeFrom(iter.Key())
 
-	logrus.Debugf("lookupKey:%s,internalKey:%s\n", lookupKey.Debug(), internalKey.Debug())
+	logrus.Debugf("sstable get, lookupKey=%s,internalKey=%s", lookupKey.Debug(), internalKey.Debug())
 	if !bytes.Equal(internalKey.UserKey, lookupKey.UserKey) {
 		return nil, false
 	}
